@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#050816">
+<title>Epix Jump — Epix Engine V1</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050816;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;touch-action:none}
+body{display:flex;align-items:center;justify-content:center}
+#game{position:fixed;inset:0;width:100vw;height:100vh;display:block;background:#071326}
+#hud{position:fixed;top:max(10px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:9px;align-items:center;padding:8px 12px;border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(5,10,28,.65);backdrop-filter:blur(10px);box-shadow:0 8px 30px rgba(0,0,0,.25);font-weight:800;white-space:nowrap}
+.stat{padding:4px 8px;font-size:14px;color:#eaf1ff}.stat b{color:#7dd3fc}
+#pause{position:fixed;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:6;width:52px;height:52px;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:rgba(5,10,28,.68);color:white;font-size:23px}
+#controls{position:fixed;inset:auto 0 max(14px,env(safe-area-inset-bottom)) 0;z-index:7;display:flex;justify-content:space-between;align-items:end;padding:0 max(18px,env(safe-area-inset-right)) 0 max(18px,env(safe-area-inset-left));pointer-events:none}
+.cluster{display:flex;gap:12px;pointer-events:auto}
+.btn{width:76px;height:76px;border-radius:24px;border:1px solid rgba(255,255,255,.22);background:linear-gradient(145deg,rgba(61,93,160,.86),rgba(25,43,83,.86));box-shadow:0 9px 24px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.18);color:white;font-size:34px;font-weight:900;display:grid;place-items:center;user-select:none}
+.btn:active,.btn.on{transform:scale(.95);filter:brightness(1.18)}
+#jump{width:86px;height:86px;border-radius:50%}
+#slide{border-radius:50%}
+#menu{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;background:rgba(2,6,20,.72);backdrop-filter:blur(9px)}
+.card{width:min(92vw,470px);padding:28px;border:1px solid rgba(255,255,255,.15);border-radius:28px;background:linear-gradient(160deg,rgba(18,29,61,.97),rgba(7,13,31,.97));box-shadow:0 25px 80px rgba(0,0,0,.45);text-align:center;color:white}
+.card h1{margin:0 0 8px;font-size:36px;letter-spacing:.5px}.card p{margin:8px 0 20px;color:#aebbd6;line-height:1.7}
+.primary{width:100%;padding:15px;border:0;border-radius:16px;background:linear-gradient(135deg,#38bdf8,#6366f1);color:white;font-size:18px;font-weight:900}
+.small{margin-top:14px;font-size:12px;color:#7785a5}
+.hidden{display:none!important}
+@media(max-height:500px){
+ .btn{width:64px;height:64px;border-radius:20px;font-size:29px}
+ #jump{width:74px;height:74px}
+ #hud{transform:translateX(-50%) scale(.9)}
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div class="stat">❤️ <b id="lives">3</b></div>
+  <div class="stat">💎 <b id="gems">0</b></div>
+  <div class="stat">🪙 <b id="coins">0</b></div>
+  <div class="stat">🏆 <b id="score">0</b></div>
+</div>
+<button id="pause" aria-label="إيقاف">Ⅱ</button>
+
+<div id="controls">
+  <div class="cluster">
+    <button class="btn" id="left" aria-label="يسار">◀</button>
+    <button class="btn" id="right" aria-label="يمين">▶</button>
+  </div>
+  <div class="cluster">
+    <button class="btn" id="slide" aria-label="انزلاق">↘</button>
+    <button class="btn" id="jump" aria-label="قفز">↑</button>
+  </div>
+</div>
+
+<div id="menu">
+ <div class="card">
+   <h1>⚡ Epix Jump</h1>
+   <p id="menuText">Epix Engine V1<br>حركة سلسة، قفز متغير الارتفاع، Coyote Time، Jump Buffer، Slide وWall Jump.</p>
+   <button class="primary" id="start">ابدأ اللعب</button>
+   <div class="small">اضغط مطولًا للقفز أعلى • اترك الزر لقفزة أقصر</div>
+ </div>
+</div>
+
+<script>
+"use strict";
+
+/* =========================
+   Epix Engine V1
+   Fixed timestep + robust camera/render scaling
+   ========================= */
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d",{alpha:false,desynchronized:true});
+
+let W=1280,H=720,DPR=1;
+function resize(){
+  W=Math.max(320,innerWidth); H=Math.max(240,innerHeight);
+  DPR=Math.min(2,Math.max(1,devicePixelRatio||1));
+  canvas.width=Math.floor(W*DPR); canvas.height=Math.floor(H*DPR);
+  canvas.style.width=W+"px"; canvas.style.height=H+"px";
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+addEventListener("resize",resize,{passive:true}); resize();
+
+const input={left:false,right:false,jump:false,slide:false,jumpPressed:false};
+function bindHold(id,key){
+  const el=document.getElementById(id);
+  const down=e=>{e.preventDefault(); if(!input[key]){if(key==="jump")input.jumpPressed=true;} input[key]=true; el.classList.add("on");};
+  const up=e=>{e.preventDefault();input[key]=false;el.classList.remove("on");};
+  el.addEventListener("pointerdown",down); el.addEventListener("pointerup",up);
+  el.addEventListener("pointercancel",up); el.addEventListener("pointerleave",e=>{if(e.buttons===0)up(e)});
+}
+bindHold("left","left");bindHold("right","right");bindHold("jump","jump");bindHold("slide","slide");
+
+addEventListener("keydown",e=>{
+  if(["ArrowLeft","ArrowRight","ArrowUp","Space","KeyA","KeyD","KeyW","KeyS"].includes(e.code))e.preventDefault();
+  if(e.code==="ArrowLeft"||e.code==="KeyA")input.left=true;
+  if(e.code==="ArrowRight"||e.code==="KeyD")input.right=true;
+  if(e.code==="ArrowUp"||e.code==="Space"||e.code==="KeyW"){if(!input.jump)input.jumpPressed=true;input.jump=true;}
+  if(e.code==="ArrowDown"||e.code==="KeyS")input.slide=true;
+});
+addEventListener("keyup",e=>{
+  if(e.code==="ArrowLeft"||e.code==="KeyA")input.left=false;
+  if(e.code==="ArrowRight"||e.code==="KeyD")input.right=false;
+  if(e.code==="ArrowUp"||e.code==="Space"||e.code==="KeyW")input.jump=false;
+  if(e.code==="ArrowDown"||e.code==="KeyS")input.slide=false;
+});
+addEventListener("contextmenu",e=>e.preventDefault());
+
+let audioOn=true,audioCtx=null;
+function sound(freq,dur,type="sine",gain=.035){
+  if(!audioOn)return;
+  try{
+    audioCtx ||= new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==="suspended")audioCtx.resume();
+    const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime;
+    o.type=type;o.frequency.setValueAtTime(freq,t);o.frequency.exponentialRampToValueAtTime(Math.max(40,freq*.65),t+dur);
+    g.gain.setValueAtTime(gain,t);g.gain.exponentialRampToValueAtTime(.001,t+dur);
+    o.connect(g);g.connect(audioCtx.destination);o.start(t);o.stop(t+dur);
+  }catch(_){}
+}
+
+const engine={
+  gravity:2200,
+  maxRun:330,
+  groundAccel:2100,
+  airAccel:1250,
+  groundFriction:2400,
+  airFriction:450,
+  jumpSpeed:720,
+  jumpCut:0.48,
+  coyote:.11,
+  buffer:.13,
+  wallJumpX:520,
+  wallJumpY:690,
+  fixed:1/120,
+  accumulator:0,
+  last:performance.now()/1000
+};
+
+const player={
+ x:180,y:420,w:42,h:64,vx:0,vy:0,grounded:false,
+ coyote:0,jumpBuffer:0,wall:0,wallLock:0,slide:false,
+ facing:1,invuln:0,spawnX:180,spawnY:300,anim:0
+};
+
+const platforms=[
+ // أرضية رئيسية متصلة: لا توجد "فخاخ" غير مرئية
+ {x:-300,y:600,w:1500,h:160},
+ {x:1280,y:600,w:1150,h:160},
+ {x:2500,y:600,w:1500,h:160},
+ // منصات قابلة للوصول ضمن قدرة القفز
+ {x:520,y:500,w:250,h:28},
+ {x:880,y:430,w:250,h:28},
+ {x:1180,y:520,w:210,h:28},
+ {x:1510,y:490,w:240,h:28},
+ {x:1830,y:400,w:250,h:28},
+ {x:2160,y:500,w:230,h:28},
+ {x:2510,y:440,w:260,h:28},
+ {x:2870,y:360,w:250,h:28},
+ {x:3200,y:480,w:300,h:28}
+];
+
+const hazards=[
+ {x:740,y:568,w:70,h:32,kind:"spike"},
+ {x:1390,y:568,w:90,h:32,kind:"spike"},
+ {x:1750,y:568,w:80,h:32,kind:"spike"},
+ {x:2390,y:568,w:90,h:32,kind:"spike"},
+ {x:2770,y:568,w:90,h:32,kind:"spike"}
+];
+// Obstacles are placed on the route, not under floating platforms.
+const blocks=[
+ {x:1010,y:538,w:44,h:62,kind:"rock"},
+ {x:1600,y:438,w:46,h:52,kind:"crate"},
+ {x:2010,y:548,w:50,h:52,kind:"rock"},
+ {x:2960,y:298,w:48,h:62,kind:"rock"}
+];
+
+const coins=[
+ {x:600,y:455},{x:690,y:455},{x:950,y:385},{x:1260,y:475},
+ {x:1570,y:445},{x:1900,y:355},{x:2240,y:455},{x:2600,y:395},
+ {x:2950,y:315},{x:3300,y:435}
+].map(o=>({...o,taken:false}));
+const gems=[
+ {x:1080,y:380},{x:1710,y:350},{x:2640,y:340},{x:3360,y:430}
+].map(o=>({...o,taken:false}));
+
+const enemies=[
+ {x:930,y:390,w:42,h:40,vx:65,min:880,max:1080,type:"walker",alive:true},
+ {x:1540,y:450,w:44,h:40,vx:80,min:1510,max:1720,type:"walker",alive:true},
+ {x:2220,y:460,w:42,h:40,vx:-75,min:2160,max:2350,type:"walker",alive:true},
+ {x:2890,y:320,w:42,h:40,vx:60,min:2870,max:3080,type:"walker",alive:true}
+];
+
+let score=0,lives=3,coinCount=0,gemCount=0,shake=0,paused=true,started=false;
+let particles=[],cameraX=0,worldTime=0;
+
+function rects(a,b){
+ return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+}
+function spawnParticles(x,y,n=10){
+ for(let i=0;i<n;i++)particles.push({x,y,vx:(Math.random()-.5)*260,vy:(Math.random()-.8)*260,life:.45+Math.random()*.35,r:2+Math.random()*4});
+}
+function respawn(){
+ player.x=player.spawnX;player.y=player.spawnY;player.vx=0;player.vy=0;player.grounded=false;
+ player.wall=0;player.wallLock=.2;player.invuln=1.1;cameraX=Math.max(0,player.x-W*.32);
+}
+function hurt(){
+ if(player.invuln>0)return;
+ lives--;player.invuln=1.2;shake=.22;sound(90,.18,"square",.06);spawnParticles(player.x+player.w/2,player.y+player.h/2,18);
+ if(navigator.vibrate)navigator.vibrate(45);
+ if(lives<=0){lives=3;score=0;coinCount=0;gemCount=0;coins.forEach(c=>c.taken=false);gems.forEach(g=>g.taken=false);}
+ respawn();
+}
+function jump(){
+ if(player.coyote>0||player.grounded){
+   player.vy=-engine.jumpSpeed;player.grounded=false;player.coyote=0;player.jumpBuffer=0;
+   sound(420,.11,"sine",.045);spawnParticles(player.x+player.w/2,player.y+player.h,7);shake=.035;
+   return true;
+ }
+ if(player.wall && player.wallLock<=0){
+   player.vy=-engine.wallJumpY;player.vx=-player.wall*engine.wallJumpX;player.wall=0;player.wallLock=.16;
+   sound(520,.1,"triangle",.045);spawnParticles(player.x+(player.wall<0?0:player.w),player.y+player.h/2,8);return true;
+ }
+ return false;
+}
+
+function moveToward(v,target,max){
+ return v<target?Math.min(v+max,target):Math.max(v-max,target);
+}
+function updatePlayer(dt){
+ player.anim+=dt*8;
+ if(player.invuln>0)player.invuln-=dt;
+ if(player.wallLock>0)player.wallLock-=dt;
+
+ if(input.jumpPressed){player.jumpBuffer=engine.buffer;input.jumpPressed=false;}
+ else if(player.jumpBuffer>0)player.jumpBuffer-=dt;
+ if(player.grounded)player.coyote=engine.coyote;else player.coyote=Math.max(0,player.coyote-dt);
+
+ const dir=(input.right?1:0)-(input.left?1:0);
+ if(dir!==0){
+   player.facing=dir;
+   const accel=player.grounded?engine.groundAccel:engine.airAccel;
+   player.vx=moveToward(player.vx,dir*engine.maxRun,accel*dt);
+ }else{
+   const fr=player.grounded?engine.groundFriction:engine.airFriction;
+   player.vx=moveToward(player.vx,0,fr*dt);
+ }
+
+ player.slide=input.slide&&player.grounded&&Math.abs(player.vx)>100;
+ if(player.slide){player.vx=moveToward(player.vx,player.facing*360,900*dt);}
+
+ if(player.jumpBuffer>0 && jump()){}
+ if(!input.jump && player.vy<0)player.vy+=engine.gravity*engine.jumpCut*dt;
+ player.vy+=engine.gravity*dt;
+ player.vy=Math.min(player.vy,1100);
+
+ // Horizontal movement and wall detection
+ player.x+=player.vx*dt;
+ player.wall=0;
+ for(const p of platforms){
+   if(!rects(player,p))continue;
+   // Only solid side collision for tall geometry; platform tops are handled below.
+   const oldRight=player.x+player.w-player.vx*dt, oldLeft=player.x-player.vx*dt;
+   if(oldRight<=p.x+2 && player.vx>0){player.x=p.x-player.w;player.vx=0;player.wall=1;}
+   else if(oldLeft>=p.x+p.w-2 && player.vx<0){player.x=p.x+p.w;player.vx=0;player.wall=-1;}
+ }
+ // Vertical movement
+ const oldY=player.y;
+ player.y+=player.vy*dt;
+ player.grounded=false;
+ for(const p of platforms){
+   if(player.x+player.w<=p.x+2||player.x>=p.x+p.w-2)continue;
+   const oldBottom=oldY+player.h, newBottom=player.y+player.h;
+   if(player.vy>=0 && oldBottom<=p.y+5 && newBottom>=p.y){
+     player.y=p.y-player.h;player.vy=0;player.grounded=true;
+   }else if(player.vy<0 && oldY>=p.y+p.h-2 && player.y<=p.y+p.h){
+     player.y=p.y+p.h;player.vy=0;
+   }
+ }
+ if(player.grounded && player.jumpBuffer>0)jump();
+
+ // Slide changes the actual hitbox, not just animation.
+ const targetH=player.slide?40:64;
+ if(player.h!==targetH){
+   if(targetH<player.h){player.y+=player.h-targetH;}
+   else{player.y-=targetH-player.h;}
+   player.h=targetH;
+ }
+
+ for(const h of hazards){
+   const hb={x:h.x+8,y:h.y+10,w:h.w-16,h:h.h-10};
+   if(rects(player,hb)){hurt();break;}
+ }
+ for(const b of blocks){
+   if(rects(player,b)){
+     // A block is a solid obstacle; side contact hurts only when marked dangerous.
+     if(b.kind==="rock" && player.y+player.h-12>b.y){hurt();break;}
+   }
+ }
+ for(const e of enemies){
+   if(!e.alive)continue;
+   e.x+=e.vx*dt;
+   if(e.x<e.min||e.x+e.w>e.max)e.vx*=-1;
+   if(rects(player,e)){
+     const stomp=player.vy>100 && player.y+player.h-player.vy*dt<=e.y+12;
+     if(stomp){e.alive=false;player.vy=-470;score+=150;sound(180,.12,"square",.045);spawnParticles(e.x+e.w/2,e.y+e.h/2,16);}
+     else hurt();
+   }
+ }
+ for(const c of coins)if(!c.taken&&rects(player,{x:c.x-13,y:c.y-13,w:26,h:26})){c.taken=true;coinCount++;score+=25;sound(780,.08,"triangle",.035);spawnParticles(c.x,c.y,7);}
+ for(const g of gems)if(!g.taken&&rects(player,{x:g.x-16,y:g.y-16,w:32,h:32})){g.taken=true;gemCount++;score+=100;sound(980,.12,"triangle",.045);spawnParticles(g.x,g.y,12);}
+ if(player.y>H+220)hurt();
+
+ // Camera follows a stable world point and never jumps to an invalid scale.
+ const target=Math.max(0,player.x-W*.34);
+ cameraX+=(target-cameraX)*Math.min(1,dt*8);
+}
+
+function update(dt){
+ worldTime+=dt;
+ updatePlayer(dt);
+ for(const p of particles){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=700*dt;p.life-=dt;}
+ particles=particles.filter(p=>p.life>0);
+ shake=Math.max(0,shake-dt);
+ document.getElementById("lives").textContent=lives;
+ document.getElementById("coins").textContent=coinCount;
+ document.getElementById("gems").textContent=gemCount;
+ document.getElementById("score").textContent=score;
+}
+
+function rounded(x,y,w,h,r){
+ ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fill();
+}
+function drawBackground(){
+ const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,"#071126");g.addColorStop(.6,"#102b49");g.addColorStop(1,"#18334d");ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ // parallax mountains
+ for(let layer=0;layer<3;layer++){
+   ctx.beginPath();ctx.moveTo(0,H*.62+layer*20);
+   const step=180;
+   for(let x=-step;x<W+step;x+=step){
+     const wx=x+cameraX*(.08+layer*.08);
+     ctx.lineTo(x,H*.62-layer*25-(Math.sin(wx*.003)*35)-layer*18);
+     ctx.lineTo(x+step/2,H*.62-layer*25-70-layer*15);
+     ctx.lineTo(x+step,H*.62-layer*25-(Math.sin((wx+step)*.003)*35)-layer*18);
+   }
+   ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();
+   ctx.fillStyle=`rgba(20,40,70,${.75-layer*.14})`;ctx.fill();
+ }
+ // distant lights
+ for(let i=0;i<22;i++){
+   const x=((i*340-cameraX*.18)% (W+400)+W+400)%(W+400)-200;
+   const y=130+(i%5)*42;
+   ctx.fillStyle="rgba(125,211,252,.16)";ctx.beginPath();ctx.arc(x,y,2+(i%3),0,Math.PI*2);ctx.fill();
+ }
+}
+function drawWorld(){
+ ctx.save();
+ let sx=0,sy=0;if(shake){sx=(Math.random()-.5)*8;sy=(Math.random()-.5)*8;}ctx.translate(sx,sy);
+ ctx.save();ctx.translate(-cameraX,0);
+
+ // ground shadows / terrain
+ for(const p of platforms){
+   ctx.fillStyle="rgba(0,0,0,.22)";rounded(p.x+8,p.y+10,p.w,p.h,10);
+   const gr=ctx.createLinearGradient(0,p.y,0,p.y+p.h);gr.addColorStop(0,"#365b62");gr.addColorStop(.15,"#25474e");gr.addColorStop(1,"#152c37");
+   ctx.fillStyle=gr;rounded(p.x,p.y,p.w,p.h,9);
+   ctx.fillStyle="#69a77c";rounded(p.x,p.y,p.w,9,5);
+   ctx.fillStyle="rgba(255,255,255,.09)";ctx.fillRect(p.x+4,p.y+12,p.w-8,2);
+ }
+ // hazards
+ for(const h of hazards){
+   ctx.fillStyle="#e64b57";ctx.beginPath();
+   for(let x=h.x;x<h.x+h.w;x+=18){ctx.moveTo(x,h.y+h.h);ctx.lineTo(x+9,h.y);ctx.lineTo(x+18,h.y+h.h);}
+   ctx.fill();ctx.fillStyle="#ff8990";ctx.fillRect(h.x,h.y+h.h-4,h.w,4);
+ }
+ // blocks
+ for(const b of blocks){
+   const gr=ctx.createLinearGradient(b.x,b.y,b.x+b.w,b.y+b.h);gr.addColorStop(0,"#7b8798");gr.addColorStop(1,"#3d4758");
+   ctx.fillStyle=gr;rounded(b.x,b.y,b.w,b.h,7);ctx.strokeStyle="rgba(255,255,255,.18)";ctx.stroke();
+ }
+ // coins
+ for(const c of coins)if(!c.taken){
+   const bob=Math.sin(worldTime*5+c.x)*4;ctx.save();ctx.translate(c.x,c.y+bob);
+   ctx.fillStyle="#ffd34d";ctx.beginPath();ctx.arc(0,0,11,0,Math.PI*2);ctx.fill();
+   ctx.strokeStyle="#fff0a1";ctx.lineWidth=2;ctx.stroke();ctx.fillStyle="#9a6b00";ctx.font="bold 12px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("E",0,1);ctx.restore();
+ }
+ for(const g of gems)if(!g.taken){
+   const bob=Math.sin(worldTime*4+g.x)*5;ctx.save();ctx.translate(g.x,g.y+bob);ctx.rotate(Math.PI/4);
+   ctx.fillStyle="#7dd3fc";ctx.shadowBlur=15;ctx.shadowColor="#38bdf8";ctx.fillRect(-10,-10,20,20);ctx.shadowBlur=0;
+   ctx.restore();
+ }
+ // enemies
+ for(const e of enemies)if(e.alive){
+   ctx.save();ctx.translate(e.x,e.y);
+   ctx.fillStyle="#9b3f58";rounded(0,7,e.w,e.h-7,12);
+   ctx.fillStyle="#ff758f";ctx.beginPath();ctx.arc(12,15,5,0,Math.PI*2);ctx.arc(30,15,5,0,Math.PI*2);ctx.fill();
+   ctx.fillStyle="#111827";ctx.beginPath();ctx.arc(12,15,2,0,Math.PI*2);ctx.arc(30,15,2,0,Math.PI*2);ctx.fill();
+   ctx.fillStyle="#6e2439";ctx.fillRect(7,e.h-4,8,7);ctx.fillRect(27,e.h-4,8,7);ctx.restore();
+ }
+ drawPlayer();
+ // particles
+ for(const p of particles){ctx.globalAlpha=Math.max(0,p.life*2);ctx.fillStyle="#a5f3fc";ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
+ ctx.restore();ctx.restore();
+}
+function drawPlayer(){
+ if(player.invuln>0 && Math.floor(player.invuln*14)%2===0)return;
+ ctx.save();ctx.translate(player.x+player.w/2,player.y+player.h/2);ctx.scale(player.facing,1);
+ const run=Math.sin(player.anim)*3*(Math.abs(player.vx)>30?1:0);
+ // shadow
+ ctx.fillStyle="rgba(0,0,0,.28)";ctx.beginPath();ctx.ellipse(0,player.h/2+7,24,6,0,0,Math.PI*2);ctx.fill();
+ // cape/body
+ ctx.fillStyle="#35bdf5";ctx.beginPath();ctx.moveTo(-18,-12);ctx.lineTo(-28,26);ctx.lineTo(0,18);ctx.lineTo(17,28);ctx.lineTo(18,-12);ctx.closePath();ctx.fill();
+ ctx.fillStyle="#14213d";rounded(-17,-7,34,31,11);
+ // head
+ ctx.fillStyle="#f0c7a7";ctx.beginPath();ctx.arc(0,-25,15,0,Math.PI*2);ctx.fill();
+ // hair/helmet
+ ctx.fillStyle="#243b64";ctx.beginPath();ctx.arc(0,-29,15,Math.PI,Math.PI*2);ctx.lineTo(13,-20);ctx.lineTo(-13,-20);ctx.closePath();ctx.fill();
+ // visor
+ ctx.fillStyle="rgba(125,211,252,.82)";rounded(-11,-28,22,8,4);
+ // legs
+ ctx.strokeStyle="#0b1328";ctx.lineWidth=8;ctx.lineCap="round";
+ ctx.beginPath();ctx.moveTo(-7,20);ctx.lineTo(-11+run,32);ctx.moveTo(7,20);ctx.lineTo(11-run,32);ctx.stroke();
+ // boots
+ ctx.strokeStyle="#60a5fa";ctx.lineWidth=7;ctx.beginPath();ctx.moveTo(-13+run,32);ctx.lineTo(-2+run,32);ctx.moveTo(8-run,32);ctx.lineTo(19-run,32);ctx.stroke();
+ // arm
+ ctx.strokeStyle="#f0c7a7";ctx.lineWidth=7;ctx.beginPath();ctx.moveTo(14,-3);ctx.lineTo(23,8+run);ctx.stroke();
+ ctx.restore();
+}
+
+function draw(){
+ drawBackground();drawWorld();
+}
+
+function frame(nowMs){
+ const now=nowMs/1000;
+ let delta=Math.min(.05,now-engine.last);engine.last=now;engine.accumulator+=delta;
+ if(started&&!paused){
+   while(engine.accumulator>=engine.fixed){update(engine.fixed);engine.accumulator-=engine.fixed;}
+ }
+ draw();requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+const menu=document.getElementById("menu"),start=document.getElementById("start"),pause=document.getElementById("pause");
+start.onclick=()=>{
+ started=true;paused=false;menu.classList.add("hidden");sound(440,.12);sound(660,.12);
+};
+pause.onclick=()=>{
+ if(!started)return;
+ paused=!paused;pause.textContent=paused?"▶":"Ⅱ";
+ if(paused){document.getElementById("menuText").innerHTML="اللعبة متوقفة مؤقتًا.<br>حرك اللاعب بدقة: تسارع تدريجي + قفزة متغيرة + Slide + Wall Jump.";start.textContent="متابعة اللعب";menu.classList.remove("hidden");}
+ else{menu.classList.add("hidden");start.textContent="ابدأ اللعب";}
+};
+</script>
+</body>
+</html>
